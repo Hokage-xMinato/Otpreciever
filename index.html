@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram OTP Interface (Frontend for Render)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the Inter font and overall look */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5; /* Light grey background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 1rem; /* More rounded corners */
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            padding: 2.5rem; /* Increased padding */
+            max-width: 500px;
+            width: 100%;
+            border: 1px solid #e0e0e0;
+        }
+        input, textarea {
+            border: 1px solid #d1d5db; /* Light grey border */
+            border-radius: 0.5rem; /* Slightly more rounded inputs */
+            padding: 0.75rem 1rem;
+            width: 100%;
+            transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #6366f1; /* Indigo focus ring */
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); /* Soft focus shadow */
+        }
+        button {
+            background-color: #4f46e5; /* Indigo button */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        button:hover {
+            background-color: #4338ca; /* Darker indigo on hover */
+            transform: translateY(-1px);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .warning-critical {
+            background-color: #fee2e2; /* Red background for critical warnings */
+            color: #b91c1c; /* Darker red text */
+            border: 1px solid #f87171;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            font-weight: 600;
+        }
+        .info-message {
+            background-color: #fffbeb; /* Yellow-ish background for info */
+            color: #b45309; /* Darker yellow text */
+            border: 1px solid #fcd34d;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-top: 1.5rem;
+        }
+        .otp-display {
+            background-color: #ecfdf5; /* Green-ish background for OTPs */
+            color: #059669; /* Green text */
+            border: 1px solid #a7f3d0;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            min-height: 80px; /* Ensure some height even if empty */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.125rem; /* Larger font for OTPs */
+            font-weight: 500;
+            text-align: center;
+            word-break: break-all; /* Break long OTPs */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1 class="text-3xl font-extrabold text-center text-gray-800 mb-6">Telegram OTP Interface</h1>
+        <p class="text-sm text-gray-600 text-center mb-8">
+            This interface sends credentials to a persistent backend on Render and attempts to receive real-time OTPs.
+        </p>
+
+        <div class="warning-critical mb-6">
+            <h3 class="font-bold text-lg mb-2">IMPORTANT SECURITY NOTE:</h3>
+            <p class="text-sm mb-2">
+                Your API ID, API Hash, and Session String are **highly sensitive credentials**. While a backend improves security over a pure frontend solution, storing them on *any* server requires robust security practices (e.g., using environment variables, encrypted databases, strong access controls).
+            </p>
+            <p class="text-sm">
+                **Never expose your backend API endpoints or your Telegram account by sharing your Render service URL carelessly.**
+            </p>
+        </div>
+
+        <div class="space-y-4">
+            <div>
+                <label for="apiId" class="block text-sm font-medium text-gray-700 mb-1">API ID:</label>
+                <input type="number" id="apiId" placeholder="Enter your Telegram API ID" class="focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+            </div>
+            <div>
+                <label for="apiHash" class="block text-sm font-medium text-gray-700 mb-1">API Hash:</label>
+                <input type="text" id="apiHash" placeholder="Enter your Telegram API Hash" class="focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+            </div>
+            <div>
+                <label for="sessionString" class="block text-sm font-medium text-gray-700 mb-1">Telethon/Pyrogram Session String:</label>
+                <textarea id="sessionString" rows="4" placeholder="Enter your Telethon or Pyrogram session string" class="focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"></textarea>
+            </div>
+            <button id="saveButton" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Submit Credentials to Backend
+            </button>
+            <button id="simulateOtpButton" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 mt-2">
+                Simulate OTP from Backend (for testing)
+            </button>
+        </div>
+
+        <div class="info-message mt-8">
+            <p id="backendStatus">Attempting to connect to backend...</p>
+        </div>
+
+        <div class="otp-display mt-8">
+            <p id="otpOutput" class="text-gray-500">Waiting for OTPs...</p>
+        </div>
+    </div>
+
+    <!-- Socket.IO Client Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const apiIdInput = document.getElementById('apiId');
+            const apiHashInput = document.getElementById('apiHash');
+            const sessionStringInput = document.getElementById('sessionString');
+            const saveButton = document.getElementById('saveButton');
+            const simulateOtpButton = document.getElementById('simulateOtpButton');
+            const otpOutput = document.getElementById('otpOutput');
+            const backendStatus = document.getElementById('backendStatus');
+
+            // --- Configure Socket.IO connection ---
+            // IMPORTANT:
+            // - If running locally: 'http://localhost:5000'
+            // - If deployed on Render: use the Render service URL, e.g., 'https://your-app-name.onrender.com'
+            // For a simple case where frontend and backend are hosted on the same Render service,
+            // you might use window.location.origin, but often they are separate services.
+            // For this setup, we'll assume the frontend is served by the same Render service URL.
+            const BACKEND_URL = window.location.origin;
+            console.log(`Connecting to Socket.IO backend at: ${BACKEND_URL}`);
+
+            const socket = io(BACKEND_URL); // Connect to your Flask-SocketIO backend
+
+            socket.on('connect', () => {
+                console.log('Connected to backend via WebSocket!');
+                backendStatus.textContent = `Successfully connected to backend! Your Socket.IO ID: ${socket.id}`;
+                backendStatus.style.backgroundColor = '#dbeafe'; // Light blue
+                backendStatus.style.color = '#1e40af'; // Dark blue
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Disconnected from backend.');
+                backendStatus.textContent = 'Disconnected from backend. Please check Render logs.';
+                backendStatus.style.backgroundColor = '#fee2e2'; // Light red
+                backendStatus.style.color = '#b91c1c'; // Dark red
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('Socket.IO connection error:', error);
+                backendStatus.textContent = `Connection error: ${error.message}. Ensure backend is running and accessible at ${BACKEND_URL}.`;
+                backendStatus.style.backgroundColor = '#fee2e2';
+                backendStatus.style.color = '#b91c1c';
+            });
+
+            // Listen for custom 'backend_status' events from the backend
+            socket.on('backend_status', (data) => {
+                console.log('Backend status:', data.message);
+                backendStatus.textContent = `Backend Status: ${data.message}`;
+            });
+
+            // Listen for 'otp_received' events from the backend
+            socket.on('otp_received', (data) => {
+                console.log('Received OTP from backend:', data.otp);
+                otpOutput.textContent = `Received OTP: ${data.otp}`;
+                otpOutput.style.backgroundColor = '#dbeafe'; // Blue-ish for new OTP
+                otpOutput.style.color = '#1e40af'; // Blue text
+                // You might want to temporarily highlight it, then fade back
+                setTimeout(() => {
+                    otpOutput.style.backgroundColor = '#ecfdf5'; // Revert after a short delay
+                    otpOutput.style.color = '#059669';
+                }, 5000);
+            });
+
+            saveButton.addEventListener('click', async () => {
+                const apiId = apiIdInput.value;
+                const apiHash = apiHashInput.value;
+                const sessionString = sessionStringInput.value;
+
+                if (!apiId || !apiHash || !sessionString) {
+                    otpOutput.textContent = "Please fill in all fields before submitting.";
+                    otpOutput.style.backgroundColor = '#fee2e2';
+                    otpOutput.style.color = '#ef4444';
+                    return;
+                }
+
+                otpOutput.textContent = "Submitting credentials to backend...";
+                otpOutput.style.backgroundColor = '#fffbeb'; // Yellow for pending
+                otpOutput.style.color = '#b45309';
+
+                try {
+                    // Fetch to the /save-credentials endpoint on the same Render service
+                    const response = await fetch(`${BACKEND_URL}/save-credentials`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            api_id: apiId,
+                            api_hash: apiHash,
+                            session_string: sessionString,
+                            socket_id: socket.id // Send the current Socket.IO ID to the backend
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (response.ok) {
+                        otpOutput.textContent = `Backend Response: ${result.message}`;
+                        otpOutput.style.backgroundColor = '#ecfdf5'; // Green for success
+                        otpOutput.style.color = '#059669';
+                        backendStatus.textContent = "Credentials sent successfully. Backend attempting Telegram login.";
+                    } else {
+                        otpOutput.textContent = `Error from Backend: ${result.message}`;
+                        otpOutput.style.backgroundColor = '#fee2e2'; // Red for error
+                        otpOutput.style.color = '#ef4444';
+                        backendStatus.textContent = `Backend Error: ${result.message}`;
+                    }
+                } catch (error) {
+                    console.error('Error submitting credentials:', error);
+                    otpOutput.textContent = `Failed to send credentials. Error: ${error.message}`;
+                    otpOutput.style.backgroundColor = '#fee2e2';
+                    otpOutput.style.color = '#ef4444';
+                    backendStatus.textContent = `Network Error: ${error.message}`;
+                }
+            });
+
+            simulateOtpButton.addEventListener('click', () => {
+                // This button sends an event to the backend to trigger a *simulated* OTP
+                // for testing purposes, assuming the backend is running persistently.
+                console.log("Requesting OTP simulation from backend...");
+                socket.emit('request_otp_simulation', {});
+                otpOutput.textContent = "Requested OTP simulation from backend...";
+                otpOutput.style.backgroundColor = '#fffbeb'; // Yellow for pending
+                otpOutput.style.color = '#b45309';
+            });
+        });
+    </script>
+</body>
+</html>
