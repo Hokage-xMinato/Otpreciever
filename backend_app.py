@@ -1,107 +1,164 @@
 # backend_app.py
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 import os
-import json
+import asyncio
+import random
+import string
 
-# --- IMPORT YOUR TELEGRAM LIBRARY HERE ---
-# from telethon import TelegramClient, events
-# from pyrogram import Client, filters, idle
-# ----------------------------------------
+# --- TELETHON IMPORTS ---
+# You'll need to make sure Telethon is installed: pip install Telethon
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+import logging
 
-app = Flask(__name__)
-# Configure SocketIO for CORS to allow connections from your frontend (localhost:5000)
-# In production, replace '*' with your actual frontend domain(s)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Set up logging for Telethon (optional but useful for debugging)
+logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.WARNING)
 
-# --- Global dictionary to store active Telegram clients (for simplicity, in memory) ---
-# In a real app, you'd manage persistent storage and potentially multiple users
-telegram_clients = {} # {sid: telegram_client_instance}
-# ------------------------------------------------------------------------------------
+# ------------------------
+
+app = Flask(__name__, static_folder='.', static_url_path='') # Serve static files from current directory
+# Configure SocketIO for CORS to allow connections from your frontend
+# In production, replace '*' with your actual frontend domain(s) if frontend and backend are separate services.
+# If they are on the same Render service, use the Render domain.
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent') # Using gevent for async
+
+# --- Global dictionary to store active Telegram clients and their associated Socket.IO SIDs ---
+# In a real app, this should be backed by a persistent database (e.g., Redis, PostgreSQL)
+# and handle multiple users securely. For simplicity, this is in-memory for a single instance.
+active_telegram_sessions = {} # {socket_id: {'client': TelegramClient, 'api_id': int, 'api_hash': str, 'session_string': str}}
+# ---------------------------------------------------------------------------------------------
 
 @app.route('/')
-def index():
-    """Serves the index page (optional, for testing if backend is running)."""
-    return "Backend is running. Connect your frontend!"
+def index_html():
+    """Serves the index.html file directly from the root."""
+    return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/save-credentials', methods=['POST'])
-def save_credentials():
+async def save_credentials():
     """
     Receives API ID, API Hash, and Session String from the frontend.
-    This is where you would initialize/manage your Telegram client.
+    Initializes/manages the Telegram client for the specific user.
     """
     data = request.json
-    api_id = data.get('api_id')
+    api_id = int(data.get('api_id')) # Ensure it's an integer
     api_hash = data.get('api_hash')
     session_string = data.get('session_string')
-    client_sid = request.sid # Get the session ID of the client making the request
+    client_socket_id = data.get('socket_id') # Get the Socket.IO ID from frontend
 
-    if not all([api_id, api_hash, session_string]):
-        return jsonify({"status": "error", "message": "Missing credentials"}), 400
+    if not all([api_id, api_hash, session_string, client_socket_id]):
+        return jsonify({"status": "error", "message": "Missing API ID, API Hash, Session String, or Socket ID"}), 400
 
-    print(f"Received credentials for client {client_sid}:")
+    print(f"Received credentials for Socket.IO client {client_socket_id}:")
     print(f"  API ID: {api_id}")
-    print(f"  API Hash: {api_hash[:4]}...") # Print only first few chars for security
-    print(f"  Session String: {session_string[:10]}...") # Print only first few chars
+    print(f"  API Hash: {api_hash[:4]}...")
+    print(f"  Session String: {session_string[:10]}...")
+
+    if client_socket_id in active_telegram_sessions:
+        # If client already exists, disconnect and re-initialize to use new credentials
+        print(f"Disconnecting existing client for {client_socket_id}...")
+        try:
+            await active_telegram_sessions[client_socket_id]['client'].disconnect()
+        except Exception as e:
+            print(f"Error disconnecting existing client: {e}")
+        del active_telegram_sessions[client_socket_id]
 
     try:
-        # --- TELEGRAM CLIENT INITIALIZATION LOGIC GOES HERE ---
-        # This is highly conceptual. A real implementation would:
-        # 1. Initialize Telethon/Pyrogram client with session_string
-        # 2. Add event handlers to listen for new messages (OTPs)
-        # 3. Connect the client and keep it running
+        # Initialize Telethon client
+        # IMPORTANT: When running Telethon for the first time with a new session string,
+        # it might need to send a code to your Telegram account and then receive it
+        # to properly authenticate. This typically requires interactive input or a
+        # pre-authenticated session string.
+        # This example assumes a valid, pre-generated session string is provided.
+        client = TelegramClient(StringSession(session_string), api_id, api_hash)
 
-        # Example placeholder:
-        # from telethon import TelegramClient
-        # client = TelegramClient(session_string, api_id, api_hash)
-        #
-        # @client.on(events.NewMessage(pattern=r'.*login code.*|.*OTP is.*', incoming=True))
-        # async def handler(event):
-        #     print(f"Detected potential OTP: {event.message.text}")
-        #     # Emit the OTP back to the specific client that submitted these credentials
-        #     socketio.emit('otp_received', {'otp': event.message.text}, room=client_sid)
-        #
-        # await client.start()
-        # telegram_clients[client_sid] = client # Store client instance keyed by sid
+        # Attach an event handler to listen for new messages
+        @client.on(events.NewMessage(incoming=True))
+        async def handler(event):
+            # Check if the message contains common OTP phrases
+            message_text = event.message.text
+            if message_text and ("login code" in message_text.lower() or "otp is" in message_text.lower() or "telegram code" in message_text.lower()):
+                print(f"Detected potential OTP for {client_socket_id}: {message_text}")
+                # Emit the OTP back to the specific client that owns this session
+                socketio.emit('otp_received', {'otp': message_text}, room=client_socket_id)
 
-        # For demonstration, we'll just acknowledge receipt
-        response_message = f"Credentials received. Backend is now conceptually 'listening' for OTPs for your session."
-        socketio.emit('backend_status', {'message': response_message}, room=client_sid)
+        # Connect the Telegram client in a non-blocking way
+        # asyncio.create_task ensures it runs in the background
+        async def start_telegram_client():
+            try:
+                print(f"Attempting to start Telegram client for {client_socket_id}...")
+                await client.connect()
+                if not await client.is_user_authorized():
+                    print(f"Client {client_socket_id} not authorized. Session string might be invalid or requires re-login.")
+                    # In a real app, you'd send a request for phone number and then OTP here
+                    socketio.emit('backend_status', {'message': 'Telegram client needs re-authorization. Session string might be invalid.'}, room=client_socket_id)
+                    # You might need to call client.start() and handle phone/OTP input if session is new
+                else:
+                    print(f"Telegram client for {client_socket_id} authorized and running.")
+                    socketio.emit('backend_status', {'message': 'Telegram client connected and authorized! Waiting for OTPs...'}, room=client_socket_id)
+                await client.run_until_disconnected() # Keep the client running
+            except Exception as e:
+                print(f"Error starting Telegram client for {client_socket_id}: {e}")
+                socketio.emit('backend_status', {'message': f'Error connecting Telegram client: {e}'}, room=client_socket_id)
 
+        # Store the client and its info, and run it
+        active_telegram_sessions[client_socket_id] = {
+            'client': client,
+            'api_id': api_id,
+            'api_hash': api_hash,
+            'session_string': session_string,
+            'task': asyncio.create_task(start_telegram_client()) # Run as a background task
+        }
+
+        response_message = "Credentials received. Telegram client attempting connection and listening for OTPs."
         return jsonify({"status": "success", "message": response_message})
 
     except Exception as e:
-        print(f"Error initializing Telegram client: {e}")
-        return jsonify({"status": "error", "message": f"Failed to initialize Telegram client: {str(e)}"}), 500
+        print(f"Error initializing Telegram client setup: {e}")
+        return jsonify({"status": "error", "message": f"Failed to setup Telegram client: {str(e)}"}), 500
 
 @socketio.on('connect')
-def test_connect():
+def handle_connect():
     """Called when a new client connects via WebSocket."""
     print(f"Client connected: {request.sid}")
-    emit('backend_status', {'message': f"Connected to backend! Your session ID is {request.sid}"})
+    # You might want to send the current status of their Telegram client here if it exists
+    if request.sid in active_telegram_sessions and active_telegram_sessions[request.sid]['client'].is_connected():
+        emit('backend_status', {'message': f"Reconnected to backend. Telegram client for your session is active."}, room=request.sid)
+    else:
+        emit('backend_status', {'message': f"Connected to backend! Your session ID is {request.sid}. Please submit credentials."}, room=request.sid)
+
 
 @socketio.on('disconnect')
-def test_disconnect():
+async def handle_disconnect():
     """Called when a client disconnects from WebSocket."""
     print(f"Client disconnected: {request.sid}")
     # In a real app, you might stop the associated Telegram client here
-    # if request.sid in telegram_clients:
-    #     client = telegram_clients.pop(request.sid)
-    #     client.disconnect() # or client.stop()
+    if request.sid in active_telegram_sessions:
+        print(f"Stopping Telegram client for disconnected SID: {request.sid}")
+        client_info = active_telegram_sessions.pop(request.sid)
+        try:
+            await client_info['client'].disconnect()
+            client_info['task'].cancel() # Cancel the background task
+        except Exception as e:
+            print(f"Error during client cleanup for {request.sid}: {e}")
 
 @socketio.on('request_otp_simulation')
-def handle_otp_simulation(data):
+def handle_otp_simulation():
     """
-    A conceptual event to trigger OTP simulation from the frontend.
-    In a real app, OTPs would be triggered by actual Telegram events.
+    A conceptual event to trigger OTP simulation from the backend.
+    This demonstrates real-time push via WebSockets.
     """
     print(f"Received request for OTP simulation from {request.sid}")
     # Simulate receiving an OTP
-    simulated_otp = f"SIMULATED OTP: {os.urandom(3).hex().upper()} (from backend)"
+    simulated_otp = f"SIMULATED OTP: {''.join(random.choices(string.digits, k=5))} (from backend)"
     print(f"Emitting simulated OTP: {simulated_otp}")
-    emit('otp_received', {'otp': simulated_otp})
+    emit('otp_received', {'otp': simulated_otp}, room=request.sid)
 
 if __name__ == '__main__':
-    # You can change the port if needed, e.g., port=5000
-    socketio.run(app, debug=True, port=5000)
+    # When running locally, use localhost and a default port.
+    # When deploying to Render, the 'PORT' environment variable will be set.
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Starting Flask-SocketIO app on port {port}...")
+    # Use allow_unsafe_werkzeug=True for development if needed, but not for production
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
